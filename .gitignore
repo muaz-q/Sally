@@ -1,6 +1,26 @@
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Python
 __pycache__/
 *.pyc
+
+# Env
 .env
-# generated images
+
+# Build files
+build/
+dist/
+*.spec
+
+# Generated files
+*.png
 *.jpg
-.cache
+
+# Executables
+*.exe
+
+# Misc
+*.mp4
