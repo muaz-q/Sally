@@ -10,9 +10,7 @@ from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 import tkinter as tk
 
-# ─────────────────────────────────────────────
 # ENV
-# ─────────────────────────────────────────────
 load_dotenv()
 
 sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
@@ -25,9 +23,8 @@ sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
 image_cache = {}
 build_lock = False
 
-# ─────────────────────────────────────────────
 # CORE
-# ─────────────────────────────────────────────
+
 def safe_spotify_call():
     try:
         return sp.current_user_playing_track()
@@ -48,9 +45,7 @@ def get_image(url):
     except:
         return None
 
-# ─────────────────────────────────────────────
 # TEXT GLOW (CLEAN)
-# ─────────────────────────────────────────────
 def draw_glow_text(bg, text, x, y, font, color, alpha):
     glow = Image.new("RGBA", bg.size, (0,0,0,0))
     gd = ImageDraw.Draw(glow)
@@ -68,9 +63,7 @@ def draw_glow_text(bg, text, x, y, font, color, alpha):
 
     return bg
 
-# ─────────────────────────────────────────────
 # BUILD WALLPAPER FRAME
-# ─────────────────────────────────────────────
 def build_wallpaper_frame(cover, song, artist, alpha):
 
     W, H = 960, 540
@@ -122,7 +115,7 @@ def build_wallpaper_frame(cover, song, artist, alpha):
     return bg.resize((1920,1080), Image.LANCZOS)
 
 # ─────────────────────────────────────────────
-# SAFE FADE (NO SPAMMING)
+# SAFE FADE AVOIDING NO SPAMMING
 # ─────────────────────────────────────────────
 def set_wallpaper_with_fade(url, song, artist):
 
@@ -132,16 +125,14 @@ def set_wallpaper_with_fade(url, song, artist):
 
     path = os.path.abspath("wallpaper.bmp")
 
-    # 🔥 only 3 frames → safe
+    # only 3 frames (safe)
     for alpha in [0.4, 0.7, 1.0]:
         frame = build_wallpaper_frame(cover, song, artist, alpha)
         frame.convert("RGB").save(path, "BMP")
         set_wallpaper(path)
         time.sleep(0.12)
 
-# ─────────────────────────────────────────────
 # BUBBLE
-# ─────────────────────────────────────────────
 class GlassBubble:
     def __init__(self):
         self.root = tk.Tk()
@@ -160,9 +151,7 @@ class GlassBubble:
     def run(self):
         self.root.mainloop()
 
-# ─────────────────────────────────────────────
 # MAIN
-# ─────────────────────────────────────────────
 def run():
     bubble = GlassBubble()
     last = None
