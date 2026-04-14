@@ -1,115 +1,142 @@
-# Sally 🎧✨
+# 🎧 Sally — Real-Time Spotify Wallpaper Engine
 
-**Your Music-Responsive Desktop Companion**
+Sally transforms your desktop into a dynamic music experience by automatically updating your wallpaper based on the song you're currently playing on Spotify.
 
-Sally is a dynamic desktop application that transforms your wallpaper based on the music you're playing on Spotify. It blends album art, adaptive glow effects, and a minimal floating UI to create a clean, immersive experience.
+It creates a clean, minimal UI with album art, blurred background, and glowing text — all updated in real-time with low latency.
+
+---
+
+## 🎬 Demo
+
+### 🖥️ Wallpaper in Action
+![Wallpaper Demo](assets/demo-wallpaper.gif)
+
 
 ---
 
 ## ✨ Features
 
-* 🎧 **Real-Time Spotify Sync**
-  Detects currently playing tracks instantly
+- 🎵 **Live Spotify Sync**
+  - Detects currently playing track instantly
 
-* 🖼️ **Dynamic Wallpaper Engine**
-  Generates wallpapers from album art
+- 🖼️ **Dynamic Wallpaper Generation**
+  - Uses album art to generate a blurred, aesthetic background
 
-* 🎨 **Adaptive Glow Effects**
-  Colors dynamically match the music artwork
+- ⚡ **Low Latency (~0.5–1s)**
+  - Optimized pipeline for near real-time updates
 
-* 📱 **Minimal Centered UI**
-  Clean, iPhone-inspired layout
+- 🎯 **Minimal UI Design**
+  - Centered album card with soft shadow
+  - Clean typography with subtle glow
 
-* 🎬 **Smooth Transitions**
-  Seamless visual changes between tracks
+- 🧠 **Smart Rendering Pipeline**
+  - Image caching
+  - Reduced resolution rendering + upscale
+  - Efficient blur usage
 
-* 🫧 **Floating Mini Player**
-  Displays song and artist in a lightweight overlay
-
----
-
-## 🛠️ Tech Stack
-
-* **Python**
-* **Tkinter**
-* **Pillow (PIL)**
-* **Spotipy (Spotify API)**
-* **ctypes (Windows API)**
-* **PyInstaller**
+- 🪟 **Overlay Widget**
+  - Floating window showing current song + artist
 
 ---
 
-## ⚙️ Setup
+## ⚙️ Tech Stack
 
-### Clone the repo
-
-```bash
-git clone https://github.com/muaz-q/Sally.git
-cd Sally
-```
-
-### Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### Add `.env`
-
-```env
-SPOTIFY_CLIENT_ID=your_client_id
-SPOTIFY_CLIENT_SECRET=your_client_secret
-SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
-```
-
-### Run
-
-```bash
-python main.py
-```
+- Python  
+- Spotipy (Spotify API)  
+- Pillow (Image Processing)  
+- Tkinter (Overlay UI)  
+- Windows API (Wallpaper Control)
 
 ---
 
-## 📦 Build as .exe
+## 🧠 How It Works
 
-```bash
-pyinstaller --onefile --noconsole --add-data ".env;." main.py
-```
-
----
-
-## 🎥 Demo
-
-
-https://github.com/user-attachments/assets/9613e066-bc41-43c2-81a6-1c68a558c95b
-
-
+1. Fetch current track from Spotify API  
+2. Download album artwork  
+3. Generate wallpaper:
+   - Blur background  
+   - Add album card with shadow  
+   - Render glowing text  
+4. Apply wallpaper using Windows API  
+5. Update overlay UI  
 
 ---
 
-## 🚀 Future Plans
+## ⚡ Performance Optimizations
 
-* Audio-reactive visuals
-* GPU-based rendering (no lag)
-* Settings panel
-* Auto-start on boot
-
----
-
-## 📌 Notes
-
-* Works best when Spotify is playing on the same device
-* Optimized for Windows
+- Reduced render resolution (960x540 → upscale to 1080p)  
+- Image caching to avoid re-downloads  
+- Controlled threading (no overload)  
+- Lightweight blur strategy  
+- Stable file handling (BMP for fast wallpaper updates)  
 
 ---
 
-## 👨‍💻 Author
+## 🚀 Setup
 
-**Muaz**
-CS (AI/ML) Student
+### 1. Clone the repo
+
+git clone https://github.com/muaz-q/Sally.git  
+cd Sally  
 
 ---
 
-## ⭐ Support
+### 2. Install dependencies
 
-If you like Sally, give the repo a star ⭐
+pip install spotipy pillow python-dotenv  
+
+---
+
+### 3. Setup Spotify API
+
+Create a `.env` file:
+
+SPOTIFY_CLIENT_ID=your_client_id  
+SPOTIFY_CLIENT_SECRET=your_client_secret  
+SPOTIFY_REDIRECT_URI=http://localhost:8888/callback  
+
+---
+
+### 4. Run the project
+
+python main.py  
+
+---
+
+## ⚠️ Limitations
+
+- Windows only (uses Windows wallpaper API)  
+- Requires active Spotify playback  
+- Wallpaper animations are limited by OS constraints  
+
+---
+
+## 🔮 Future Improvements
+
+- Smooth transitions between tracks  
+- Better animation system (overlay-based)  
+- Multi-monitor support  
+- Custom themes (dark/light/neon)  
+- Lyrics / karaoke mode  
+
+---
+
+## 💡 Inspiration
+
+Inspired by modern music UIs like:
+- Spotify Canvas  
+- Apple Music  
+- iOS Lock Screen widgets  
+
+---
+
+## 👤 Author
+
+Muaz  
+Second-year AIML student building real-world systems 🚀  
+
+---
+
+## ⭐ If you like this project
+
+Give it a star — it helps a lot!
