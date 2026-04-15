@@ -10,27 +10,75 @@ from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 import tkinter as tk
 
+# ─────────────────────────────────────────────
 # ENV
+# ─────────────────────────────────────────────
 load_dotenv()
 
-sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
+auth_manager = SpotifyOAuth(
     client_id=os.getenv("SPOTIFY_CLIENT_ID"),
     client_secret=os.getenv("SPOTIFY_CLIENT_SECRET"),
     redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI"),
     scope="user-read-currently-playing"
-))
+)
+
+sp = spotipy.Spotify(auth_manager=auth_manager)
 
 image_cache = {}
 build_lock = False
+rate_limited_until = 0
 
-# CORE
-
+# ─────────────────────────────────────────────
+# SAFE SPOTIFY CALL (FINAL FIX)
+# ─────────────────────────────────────────────
 def safe_spotify_call():
-    try:
-        return sp.current_user_playing_track()
-    except:
+    global rate_limited_until
+
+    # ⛔ respect cooldown
+    if time.time() < rate_limited_until:
         return None
 
+    try:
+        token = auth_manager.get_access_token(as_dict=False)
+
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+
+        response = requests.get(
+            "https://api.spotify.com/v1/me/player/currently-playing",
+            headers=headers,
+            timeout=5
+        )
+
+        if response.status_code == 200:
+            return response.json()
+
+        elif response.status_code == 204:
+            return None
+
+        elif response.status_code == 429:
+            retry_after = int(response.headers.get("Retry-After", 0))
+
+            # 🔥 critical fix
+            if retry_after <= 0:
+                retry_after = 10
+
+            print(f"⚠️ Rate limited. Cooling down {retry_after}s...")
+            rate_limited_until = time.time() + retry_after
+            return None
+
+        else:
+            print("Unexpected status:", response.status_code)
+            return None
+
+    except Exception as e:
+        print("Error:", e)
+        return None
+
+# ─────────────────────────────────────────────
+# CORE
+# ─────────────────────────────────────────────
 def set_wallpaper(path):
     ctypes.windll.user32.SystemParametersInfoW(20, 0, path, 1 | 2)
 
@@ -45,26 +93,28 @@ def get_image(url):
     except:
         return None
 
-# TEXT GLOW (CLEAN)
-def draw_glow_text(bg, text, x, y, font, color, alpha):
+# ─────────────────────────────────────────────
+# TEXT
+# ─────────────────────────────────────────────
+def draw_glow_text(bg, text, x, y, font, color):
     glow = Image.new("RGBA", bg.size, (0,0,0,0))
     gd = ImageDraw.Draw(glow)
 
-    gd.text((x,y), text, font=font, fill=(255,255,255,int(100*alpha)), anchor="mm")
+    gd.text((x,y), text, font=font, fill=(255,255,255,120), anchor="mm")
     glow = glow.filter(ImageFilter.GaussianBlur(4))
     bg = Image.alpha_composite(bg, glow)
 
-    ImageDraw.Draw(bg).text(
-        (x,y), text,
-        font=font,
-        fill=(color[0], color[1], color[2], int(255*alpha)),
-        anchor="mm"
-    )
-
+    ImageDraw.Draw(bg).text((x,y), text, font=font, fill=color, anchor="mm")
     return bg
 
-# BUILD WALLPAPER FRAME
-def build_wallpaper_frame(cover, song, artist, alpha):
+# ─────────────────────────────────────────────
+# WALLPAPER
+# ─────────────────────────────────────────────
+def build_wallpaper(url, song, artist):
+
+    cover = get_image(url)
+    if not cover:
+        return None
 
     W, H = 960, 540
 
@@ -96,10 +146,8 @@ def build_wallpaper_frame(cover, song, artist, alpha):
     shadow = shadow.filter(ImageFilter.GaussianBlur(10))
     bg = Image.alpha_composite(bg, shadow)
 
-    # album
     bg.paste(art, (x,y), mask)
 
-    # fonts
     try:
         f1 = ImageFont.truetype("arialbd.ttf", 30)
         f2 = ImageFont.truetype("arial.ttf", 18)
@@ -109,30 +157,19 @@ def build_wallpaper_frame(cover, song, artist, alpha):
     sy = y + size + 40
     ay = sy + 30
 
-    bg = draw_glow_text(bg, song, cx, sy, f1, (255,255,255), alpha)
-    bg = draw_glow_text(bg, artist, cx, ay, f2, (180,180,180), alpha)
+    bg = draw_glow_text(bg, song, cx, sy, f1, (255,255,255))
+    bg = draw_glow_text(bg, artist, cx, ay, f2, (180,180,180))
 
-    return bg.resize((1920,1080), Image.LANCZOS)
-
-# ─────────────────────────────────────────────
-# SAFE FADE AVOIDING NO SPAMMING
-# ─────────────────────────────────────────────
-def set_wallpaper_with_fade(url, song, artist):
-
-    cover = get_image(url)
-    if not cover:
-        return
+    bg = bg.resize((1920,1080), Image.LANCZOS)
 
     path = os.path.abspath("wallpaper.bmp")
+    bg.convert("RGB").save(path, "BMP")
 
-    # only 3 frames (safe)
-    for alpha in [0.4, 0.7, 1.0]:
-        frame = build_wallpaper_frame(cover, song, artist, alpha)
-        frame.convert("RGB").save(path, "BMP")
-        set_wallpaper(path)
-        time.sleep(0.12)
+    return path
 
-# BUBBLE
+# ─────────────────────────────────────────────
+# UI
+# ─────────────────────────────────────────────
 class GlassBubble:
     def __init__(self):
         self.root = tk.Tk()
@@ -151,49 +188,61 @@ class GlassBubble:
     def run(self):
         self.root.mainloop()
 
+# ─────────────────────────────────────────────
 # MAIN
+# ─────────────────────────────────────────────
 def run():
     bubble = GlassBubble()
-    last = None
+    last_track_id = None
+
+    CHECK_INTERVAL = 6  # 🔥 safe interval
 
     def worker(url, song, artist):
         global build_lock
-        set_wallpaper_with_fade(url, song, artist)
+        wall = build_wallpaper(url, song, artist)
+        if wall:
+            set_wallpaper(wall)
         build_lock = False
 
     def loop():
         global build_lock
-        nonlocal last
+        nonlocal last_track_id
 
         while True:
-            cur = safe_spotify_call()
+            try:
+                cur = safe_spotify_call()
 
-            if cur and cur["is_playing"]:
-                tid = cur["item"]["id"]
+                if cur and cur.get("is_playing"):
+                    track_id = cur["item"]["id"]
 
-                if tid != last:
-                    last = tid
+                    if track_id != last_track_id:
+                        last_track_id = track_id
 
-                    song = cur["item"]["name"]
-                    artist = cur["item"]["artists"][0]["name"]
-                    url = cur["item"]["album"]["images"][0]["url"]
+                        song = cur["item"]["name"]
+                        artist = cur["item"]["artists"][0]["name"]
+                        url = cur["item"]["album"]["images"][0]["url"]
 
-                    print("Now:", song)
+                        print("Now:", song)
 
-                    if not build_lock:
-                        build_lock = True
-                        threading.Thread(
-                            target=worker,
-                            args=(url, song, artist),
-                            daemon=True
-                        ).start()
+                        if not build_lock:
+                            build_lock = True
+                            threading.Thread(
+                                target=worker,
+                                args=(url, song, artist),
+                                daemon=True
+                            ).start()
 
-                    bubble.root.after(0, lambda: bubble.update(song, artist))
+                        bubble.root.after(0, lambda: bubble.update(song, artist))
 
-            time.sleep(0.6)
+                time.sleep(CHECK_INTERVAL)
+
+            except Exception as e:
+                print("Error:", e)
+                time.sleep(5)
 
     threading.Thread(target=loop, daemon=True).start()
     bubble.run()
 
 if __name__ == "__main__":
     run()
+

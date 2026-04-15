@@ -24,3 +24,11 @@ dist/
 
 # Misc
 *.mp4
+# temp / generated
+.cache
+*.bmp
+tempCodeRunnerFile.py
+
+# OS
+Thumbs.db
+.DS_Store
