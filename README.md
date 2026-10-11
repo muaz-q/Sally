@@ -9,6 +9,9 @@ It creates a clean, minimal UI with album art, blurred background, and glowing t
 ## 🎬 Demo
 
 ### 🖥️ Wallpaper in Action
+
+The wallpaper rebuilds itself from the album art every time the song changes:
+
 ![Wallpaper Demo](assets/demo-wallpaper.gif)
 
 
