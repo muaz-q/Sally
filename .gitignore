@@ -1,34 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Secrets / Spotify token cache
+.env
+.cache
+
 # PyInstaller
 build/
 dist/
 *.spec
-
-# Python
-__pycache__/
-*.pyc
-
-# Env
-.env
-
-# Build files
-build/
-dist/
-*.spec
-
-# Generated files
-*.png
-*.jpg
-
-# Executables
 *.exe
 
-# Misc
-*.mp4
-# temp / generated
-.cache
+# Generated wallpapers
 *.bmp
-tempCodeRunnerFile.py
+*.png
+*.jpg
+*.mp4
 
-# OS
+# Misc
+tempCodeRunnerFile.py
 Thumbs.db
 .DS_Store
