@@ -22,8 +22,9 @@ It creates a clean, minimal UI with album art, blurred background, and glowing t
 - 🖼️ **Dynamic Wallpaper Generation**
   - Uses album art to generate a blurred, aesthetic background
 
-- ⚡ **Low Latency (~0.5–1s)**
-  - Optimized pipeline for near real-time updates
+- ⚡ **Fast Updates**
+  - When a song ends naturally, the wallpaper changes within ~1s (Sally times its next check to the end of the track)
+  - Manual skips show up within ~5s — Spotify has no push API, so this is the polling interval that stays clear of rate limits
 
 - 🎯 **Minimal UI Design**
   - Centered album card with soft shadow
@@ -35,7 +36,14 @@ It creates a clean, minimal UI with album art, blurred background, and glowing t
   - Efficient blur usage
 
 - 🪟 **Overlay Widget**
-  - Floating window showing current song + artist
+  - Floating window showing current song + artist (or Paused / Nothing playing)
+  - Drag it to move it, right-click it to quit
+
+- 🔙 **Restores Your Wallpaper**
+  - Your original wallpaper comes back when Sally exits
+
+- 🎙️ **Podcasts and local files**
+  - Podcast episodes use the episode art; local files without art are skipped safely
 
 ---
 
@@ -64,11 +72,12 @@ It creates a clean, minimal UI with album art, blurred background, and glowing t
 
 ## ⚡ Performance Optimizations
 
-- Reduced render resolution (960x540 → upscale to 1080p)  
-- Image caching to avoid re-downloads  
-- Controlled threading (no overload)  
-- Lightweight blur strategy  
-- Stable file handling (BMP for fast wallpaper updates)  
+- Renders at your real screen resolution; only the blurred background is built at quarter size and upscaled, so text stays sharp  
+- Glow and shadow are blurred on small patches, not the whole screen  
+- Bounded image cache (last 20 covers) to avoid re-downloads without leaking memory  
+- One render thread that always draws the newest song; songs skipped mid-render are never lost  
+- Rate-limit aware: honours Spotify's `Retry-After` cooldown  
+- BMP output, alternating between two files so Windows never reads a half-written image  
 
 ---
 
@@ -83,23 +92,29 @@ cd Sally
 
 ### 2. Install dependencies
 
-pip install spotipy pillow python-dotenv  
+pip install -r requirements.txt  
 
 ---
 
 ### 3. Setup Spotify API
 
-Create a `.env` file:
+1. Create an app at the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+2. Add `http://127.0.0.1:8888/callback` as a Redirect URI (Spotify no longer accepts `localhost`)
+3. Copy `.env.example` to `.env` and fill it in:
 
 SPOTIFY_CLIENT_ID=your_client_id  
 SPOTIFY_CLIENT_SECRET=your_client_secret  
-SPOTIFY_REDIRECT_URI=http://localhost:8888/callback  
+SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback  
+
+The first run opens a browser to log in to Spotify; the token is cached in `.cache` after that.
 
 ---
 
 ### 4. Run the project
 
 python main.py  
+
+Right-click the overlay to quit. Your old wallpaper is put back.
 
 ---
 
@@ -115,7 +130,7 @@ python main.py
 
 - Smooth transitions between tracks  
 - Better animation system (overlay-based)  
-- Multi-monitor support  
+- Multi-monitor support (currently renders for the primary screen)  
 - Custom themes (dark/light/neon)  
 - Lyrics / karaoke mode  
 
