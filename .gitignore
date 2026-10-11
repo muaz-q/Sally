@@ -24,3 +24,8 @@ dist/
 tempCodeRunnerFile.py
 Thumbs.db
 .DS_Store
+
+# Runtime state
+settings.json
+settings.json.tmp
+sally.log*

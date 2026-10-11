@@ -1,18 +1,23 @@
 import atexit
 import ctypes
 import io
+import json
+import logging
 import os
-import queue
 import sys
 import threading
 import time
+import winreg
 from collections import OrderedDict
+from logging.handlers import RotatingFileHandler
 
 import requests
 from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap, QRadialGradient
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from spotipy.oauth2 import SpotifyOAuth
-import tkinter as tk
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -21,18 +26,20 @@ POLL_INTERVAL = 5          # seconds between Spotify checks (keeps us well under
 TRACK_END_GRACE = 0.4      # poll this long after a track should end, so natural changes are instant
 IMAGE_CACHE_SIZE = 20      # album covers kept in memory
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_PATH = os.path.join(APP_DIR, "settings.json")
+LOG_PATH = os.path.join(APP_DIR, "sally.log")
 
 # SystemParametersInfoW actions/flags
 SPI_GETDESKWALLPAPER = 0x0073
 SPI_SETDESKWALLPAPER = 0x0014
 SPIF_UPDATE_AND_BROADCAST = 0x01 | 0x02
 
-# A redirected or legacy console can't encode emoji / non-Latin titles; never crash on print
-if sys.stdout is not None:
-    try:
-        sys.stdout.reconfigure(errors="replace")
-    except Exception:
-        pass
+# Sally runs without a console (pythonw), so everything goes to sally.log
+log = logging.getLogger("sally")
+log.setLevel(logging.INFO)
+_handler = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=1, encoding="utf-8")
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+log.addHandler(_handler)
 
 # ─────────────────────────────────────────────
 # ENV
@@ -42,7 +49,8 @@ def load_auth():
     keys = ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "SPOTIFY_REDIRECT_URI"]
     missing = [k for k in keys if not os.getenv(k)]
     if missing:
-        sys.exit(f"Missing {', '.join(missing)} in .env - copy .env.example to .env and fill it in.")
+        raise RuntimeError(f"Missing {', '.join(missing)} in .env.\n\n"
+                           f"Copy .env.example to .env in {APP_DIR} and fill it in.")
 
     return SpotifyOAuth(
         client_id=os.getenv("SPOTIFY_CLIENT_ID"),
@@ -77,7 +85,7 @@ class SpotifyClient:
                 timeout=5,
             )
         except Exception as e:
-            print("Spotify request failed:", e)
+            log.warning(f"Spotify request failed: {e}")
             return None
 
         if response.status_code == 200:
@@ -97,10 +105,10 @@ class SpotifyClient:
             retry_after = max(retry_after, 10)
             # set the cooldown before printing, so nothing can skip it
             self.rate_limited_until = time.time() + retry_after
-            print(f"Rate limited. Cooling down {retry_after}s...")
+            log.warning(f"Rate limited. Cooling down {retry_after}s")
             return None
 
-        print("Unexpected Spotify status:", response.status_code)
+        log.warning(f"Unexpected Spotify status: {response.status_code}")
         return None
 
 
@@ -132,16 +140,6 @@ def parse_playing(data):
 # ─────────────────────────────────────────────
 # WINDOWS
 # ─────────────────────────────────────────────
-def enable_dpi_awareness():
-    # without this, a scaled display (125%, 150%) reports a smaller screen than it is
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
-
 def screen_size():
     user32 = ctypes.windll.user32
     return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
@@ -169,7 +167,7 @@ def get_image(url):
         response.raise_for_status()
         img = Image.open(io.BytesIO(response.content)).convert("RGB")
     except Exception as e:
-        print("Cover download failed:", e)
+        log.warning(f"Cover download failed: {e}")
         return None
 
     image_cache[url] = img
@@ -273,6 +271,8 @@ def build_wallpaper(cover, title, subtitle, W, H, path):
     return path
 
 
+
+
 class WallpaperWorker:
     """One background thread that always renders the newest track.
 
@@ -280,8 +280,7 @@ class WallpaperWorker:
     wallpaper can never get stuck on an old song.
     """
 
-    def __init__(self, screen, stopped):
-        self.screen = screen
+    def __init__(self, stopped):
         self.stopped = stopped
         self.pending = None
         self.cond = threading.Condition()
@@ -307,81 +306,82 @@ class WallpaperWorker:
                 path = os.path.join(APP_DIR, f"wallpaper_{self.turn}.bmp")
                 self.turn ^= 1
                 start = time.perf_counter()
-                build_wallpaper(cover, track["title"], track["subtitle"], *self.screen, path)
+                build_wallpaper(cover, track["title"], track["subtitle"], *screen_size(), path)
                 if self.stopped.is_set():
                     return  # quitting: don't overwrite the restored wallpaper
                 if set_wallpaper(path):
-                    print(f"Wallpaper updated in {time.perf_counter() - start:.2f}s")
+                    log.info(f"Wallpaper updated in {time.perf_counter() - start:.2f}s")
                 else:
-                    print("Windows refused the wallpaper change")
-            except Exception as e:
-                print("Wallpaper build failed:", e)
+                    log.warning("Windows refused the wallpaper change")
+            except Exception:
+                log.exception("Wallpaper build failed")
 
 # ─────────────────────────────────────────────
-# UI
+# SETTINGS / STARTUP
 # ─────────────────────────────────────────────
-class GlassBubble:
-    W, H = 340, 80
+DEFAULT_SETTINGS = {"autostart": True, "original_wallpaper": None}
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
-    def __init__(self, screen_w, on_quit):
-        self.on_quit = on_quit
-        self.updates = queue.Queue()  # tkinter is not thread-safe: other threads only put here
+def load_settings():
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
+            saved = json.load(f)
+        return {**DEFAULT_SETTINGS, **{k: v for k, v in saved.items() if k in DEFAULT_SETTINGS}}
+    except (OSError, ValueError):
+        return dict(DEFAULT_SETTINGS)
 
-        self.root = tk.Tk()
-        self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True)
-        self.root.geometry(f"{self.W}x{self.H}+{max(0, screen_w - self.W - 30)}+30")
+def save_settings(settings):
+    tmp = SETTINGS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+    os.replace(tmp, SETTINGS_PATH)
 
-        self.canvas = tk.Canvas(self.root, width=self.W, height=self.H, bg="#111", highlightthickness=0)
-        self.canvas.pack()
-        self.title = self.canvas.create_text(15, 20, text="Sally", fill="white", anchor="nw",
-                                             font=("Segoe UI", 11, "bold"), width=self.W - 30)
-        self.subtitle = self.canvas.create_text(15, 45, text="Waiting for Spotify...", fill="#aaa",
-                                                anchor="nw", font=("Segoe UI", 9), width=self.W - 30)
+def set_autostart(on):
+    # pythonw.exe: start at login with no console window
+    exe = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    if not os.path.exists(exe):
+        exe = sys.executable
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+        if on:
+            winreg.SetValueEx(key, "Sally", 0, winreg.REG_SZ, f'"{exe}" "{os.path.abspath(__file__)}"')
+        else:
+            try:
+                winreg.DeleteValue(key, "Sally")
+            except FileNotFoundError:
+                pass
 
-        # borderless windows can't be moved or closed by default
-        self.canvas.bind("<ButtonPress-1>", self._start_drag)
-        self.canvas.bind("<B1-Motion>", self._drag)
-        self.canvas.bind("<Button-3>", lambda e: self.quit())
+def is_sally_wallpaper(path):
+    return bool(path) and os.path.dirname(os.path.abspath(path)).lower() == APP_DIR.lower() \
+        and os.path.basename(path).lower().startswith("wallpaper")  # also the old wallpaper.bmp
 
-        self.root.after(200, self._poll)
+def already_running():
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    already_running.mutex = kernel32.CreateMutexW(None, False, "Local\\SallyWallpaper")
+    return ctypes.get_last_error() == 183  # ERROR_ALREADY_EXISTS
 
-    def show(self, title, subtitle):
-        self.updates.put((title, subtitle))
-
-    def _poll(self):
-        try:
-            while True:
-                title, subtitle = self.updates.get_nowait()
-                self.canvas.itemconfigure(self.title, text=self._clip(title, 36))
-                self.canvas.itemconfigure(self.subtitle, text=self._clip(subtitle, 48))
-        except queue.Empty:
-            pass
-        self.root.after(200, self._poll)
-
-    @staticmethod
-    def _clip(text, n):
-        return text if len(text) <= n else text[:n - 1].rstrip() + "…"
-
-    def _start_drag(self, e):
-        self._dx, self._dy = e.x, e.y
-
-    def _drag(self, e):
-        self.root.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
-
-    def quit(self):
-        self.on_quit()
-        self.root.destroy()
-
-    def run(self):
-        try:
-            self.root.mainloop()
-        except KeyboardInterrupt:
-            self.quit()
+def tray_icon():
+    pix = QPixmap(64, 64)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    g = QRadialGradient(32, 32, 30)
+    g.setColorAt(0.0, QColor(255, 255, 255))
+    g.setColorAt(0.45, QColor(0, 220, 255))
+    g.setColorAt(1.0, QColor(150, 80, 255, 0))
+    p.setBrush(g)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawEllipse(2, 2, 60, 60)
+    p.end()
+    return QIcon(pix)
 
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
+class Bridge(QObject):
+    """Carries updates from background threads to the Qt main thread."""
+    track = Signal(object)
+
+
 def next_poll_delay(track):
     if track and track["is_playing"] and track["duration_ms"]:
         remaining = (track["duration_ms"] - track["progress_ms"]) / 1000
@@ -390,64 +390,127 @@ def next_poll_delay(track):
     return POLL_INTERVAL
 
 
-def run():
-    if sys.platform != "win32":
-        sys.exit("Sally only runs on Windows (it uses the Windows wallpaper API).")
+class Sally:
+    def __init__(self, app, auth_manager):
+        self.app = app
+        self.settings = load_settings()
 
-    auth_manager = load_auth()
-    enable_dpi_awareness()
-    screen = screen_size()
+        # remember the user's own wallpaper across restarts, so quitting can always put it back
+        current = get_wallpaper()
+        if current and not is_sally_wallpaper(current):
+            self.settings["original_wallpaper"] = current
+        save_settings(self.settings)
+        self.apply_autostart()
 
-    # put the user's own wallpaper back when we exit
-    original = get_wallpaper()
-    if os.path.basename(original).startswith("wallpaper_") and os.path.dirname(original) == APP_DIR:
-        original = None  # left over from a crashed run; nothing better to restore
-    restored = threading.Event()
+        self.stopped = threading.Event()
+        self.bridge = Bridge()
+        self.worker = WallpaperWorker(self.stopped)
+        self.client = SpotifyClient(auth_manager)
 
-    def restore():
-        if not restored.is_set():
-            restored.set()
-            if original:
-                set_wallpaper(original)
-    atexit.register(restore)
+        self.bridge.track.connect(self.on_track)
+        self.build_tray()
+        atexit.register(self.restore_wallpaper)
 
-    client = SpotifyClient(auth_manager)
-    worker = WallpaperWorker(screen, stopped=restored)
-    bubble = GlassBubble(screen[0], on_quit=restore)
-    print("Sally running. Right-click the overlay to quit (your wallpaper will be restored).")
+        threading.Thread(target=self.poll_loop, daemon=True).start()
+        log.info("Sally started")
 
-    def loop():
+    def build_tray(self):
+        self.tray = QSystemTrayIcon(tray_icon(), self.app)
+        menu = QMenu()
+        self.now_playing = QAction("Nothing playing", menu)
+        self.now_playing.setEnabled(False)
+        menu.addAction(self.now_playing)
+        menu.addSeparator()
+        self.add_toggle(menu, "Start with Windows", "autostart", self.apply_autostart)
+        menu.addSeparator()
+        menu.addAction("Open log").triggered.connect(lambda: os.startfile(LOG_PATH))
+        menu.addAction("Quit Sally").triggered.connect(self.quit)
+        self.menu = menu
+        self.tray.setContextMenu(menu)
+        self.tray.setToolTip("Sally")
+        self.tray.show()
+
+    def add_toggle(self, menu, label, key, after=None):
+        action = QAction(label, menu)
+        action.setCheckable(True)
+        action.setChecked(self.settings[key])
+
+        def toggled(on):
+            self.settings[key] = on
+            save_settings(self.settings)
+            if after:
+                after()
+        action.toggled.connect(toggled)
+        menu.addAction(action)
+
+    def apply_autostart(self):
+        try:
+            set_autostart(self.settings["autostart"])
+        except OSError as e:
+            log.warning(f"Could not change autostart: {e}")
+
+    def on_track(self, track):
+        if track:
+            icon = "▶" if track["is_playing"] else "⏸"
+            text = f"{icon} {track['title']}"
+            if track["subtitle"]:
+                text += f" — {track['subtitle']}"
+        else:
+            text = "Nothing playing"
+        self.now_playing.setText(text if len(text) <= 60 else text[:59] + "…")
+        self.tray.setToolTip(f"Sally\n{text}"[:127])
+
+    def poll_loop(self):
         last_id = None
-        last_state = None
-        while True:
+        last_state = object()
+        while not self.stopped.is_set():
             try:
-                track = client.current()
+                track = self.client.current()
+                if track and track["is_playing"] and track["id"] != last_id:
+                    last_id = track["id"]
+                    log.info(f"Now: {track['title']} - {track['subtitle']}")
+                    if track["art_url"]:
+                        self.worker.submit(track)
 
-                if track and track["is_playing"]:
-                    if track["id"] != last_id:
-                        last_id = track["id"]
-                        print("Now:", track["title"], "-", track["subtitle"])
-                        if track["art_url"]:
-                            worker.submit(track)
-                    state = (track["title"], track["subtitle"] or " ")
-                elif track:
-                    state = (track["title"], "Paused")
-                elif client.rate_limited_until > time.time():
-                    state = last_state  # keep showing what we had while cooling down
-                else:
-                    state = ("Nothing playing", "Start something on Spotify")
-
-                if state and state != last_state:
+                cooling = track is None and self.client.rate_limited_until > time.time()
+                state = None if track is None else (track["id"], track["is_playing"])
+                if state != last_state and not cooling:
                     last_state = state
-                    bubble.show(*state)
+                    self.bridge.track.emit(track)
 
                 time.sleep(next_poll_delay(track))
-            except Exception as e:
-                print("Error:", e)
+            except Exception:
+                log.exception("Poll loop error")
                 time.sleep(POLL_INTERVAL)
 
-    threading.Thread(target=loop, daemon=True).start()
-    bubble.run()
+    def restore_wallpaper(self):
+        if self.stopped.is_set():
+            return
+        self.stopped.set()
+        original = self.settings.get("original_wallpaper")
+        if original and os.path.exists(original):
+            set_wallpaper(original)
+
+    def quit(self):
+        self.restore_wallpaper()
+        self.tray.hide()
+        self.app.quit()
+
+
+def run():
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+    if already_running():
+        return  # started twice (e.g. by login and by hand); the first copy keeps running
+
+    try:
+        auth_manager = load_auth()
+    except RuntimeError as e:
+        QMessageBox.critical(None, "Sally", str(e))
+        return
+
+    sally = Sally(app, auth_manager)  # noqa: F841 - keeps everything alive
+    app.exec()
 
 
 if __name__ == "__main__":
