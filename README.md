@@ -35,9 +35,9 @@ It creates a clean, minimal UI with album art, blurred background, and glowing t
   - Reduced resolution rendering + upscale
   - Efficient blur usage
 
-- 🪟 **Overlay Widget**
-  - Floating window showing current song + artist (or Paused / Nothing playing)
-  - Drag it to move it, right-click it to quit
+- 🖥️ **Runs 24/7 in the System Tray**
+  - No terminal window; starts with Windows
+  - Tray menu: now playing, start with Windows, open log, quit
 
 - 🔙 **Restores Your Wallpaper**
   - Your original wallpaper comes back when Sally exits
@@ -52,7 +52,7 @@ It creates a clean, minimal UI with album art, blurred background, and glowing t
 - Python  
 - Spotipy (Spotify API)  
 - Pillow (Image Processing)  
-- Tkinter (Overlay UI)  
+- PySide6 / Qt (system tray)  
 - Windows API (Wallpaper Control)
 
 ---
@@ -92,7 +92,8 @@ cd Sally
 
 ### 2. Install dependencies
 
-pip install -r requirements.txt  
+python -m venv .venv  
+.venv\Scripts\pip install -r requirements.txt  
 
 ---
 
@@ -112,9 +113,15 @@ The first run opens a browser to log in to Spotify; the token is cached in `.cac
 
 ### 4. Run the project
 
-python main.py  
+For the first run, use a terminal so you can see any errors:
 
-Right-click the overlay to quit. Your old wallpaper is put back.
+.venv\Scripts\python main.py  
+
+After that Sally lives in the system tray (the glowing dot by the clock) and starts by itself when you log in. To start it by hand with no console:
+
+.venv\Scripts\pythonw main.py  
+
+Right-click the tray icon → **Quit Sally** to stop it; your old wallpaper is put back. Logs go to `sally.log`.
 
 ---
 
@@ -129,7 +136,6 @@ Right-click the overlay to quit. Your old wallpaper is put back.
 ## 🔮 Future Improvements
 
 - Smooth transitions between tracks  
-- Better animation system (overlay-based)  
 - Multi-monitor support (currently renders for the primary screen)  
 - Custom themes (dark/light/neon)  
 - Lyrics / karaoke mode  
