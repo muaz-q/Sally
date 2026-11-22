@@ -77,6 +77,7 @@ Live mode and the battery switch are also in the tray menu and behind the ⚙ bu
 - 🔋 **Battery aware**
   - Live mode rests by itself when battery saver is on, or below 20% while unplugged, and comes back when you plug in
   - Resting leaves the plain wallpaper with the cover and title, and Sally uses almost no CPU
+  - Stops drawing while an app covers the whole desktop or the PC is locked, and picks up again the moment the desktop shows
 
 - 🖥️ **Runs 24/7 in the system tray**: no terminal window, and it starts with Windows
 
@@ -98,7 +99,7 @@ Live mode and the battery switch are also in the tray menu and behind the ⚙ bu
 
 ## ⚡ Performance
 
-- Live mode uses about a tenth of one CPU core on a typical laptop; with it off, about 3%
+- Live mode uses about a tenth of one CPU core on a typical laptop while the desktop is in view; with it off, or while a maximised app covers the desktop, about 3–4%
 - The rings, sparks and spiral are pre-drawn once per song and only moved by the graphics card each frame
 - The wallpaper renders at your real screen resolution; only the blurred background is built at quarter size and upscaled, so text stays sharp
 - Bounded image cache (last 20 covers) to avoid re-downloads without leaking memory

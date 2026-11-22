@@ -24,6 +24,7 @@ from . import layout as L
 from . import lyrics
 from .dashboard import Dashboard
 from .widgets import (Clock, Fader, Header, Lyrics, Player, Stage, Theme, TopTracks, desktop_host, pil_to_qimage,
+                      session_locked, watch_windows, window_hidden,
                      pin_to_desktop)
 
 # ─────────────────────────────────────────────
@@ -37,6 +38,7 @@ TOP_TRACKS_REFRESH = 30 * 60
 APP_DIR = str(paths.DATA)       # generated wallpapers live here
 LOG_PATH = str(paths.LOG)
 POWER_CHECK_MS = 15_000         # how often the battery is looked at
+LOCKED_POLL = 30                # seconds between Spotify checks while the PC is locked
 
 # SystemParametersInfoW actions/flags
 SPI_GETDESKWALLPAPER = 0x0073
@@ -673,6 +675,17 @@ class Sally:
         self.cover_timer.timeout.connect(self.check_covered)
         self.cover_timer.start(1500)
 
+        # battery: stop all drawing while the desktop is completely hidden or the PC is locked.
+        # Window events wake it the instant any of the desktop shows again; the timer is only
+        # a safety net (and notices the lock screen)
+        self.awake = True
+        self.locked = False
+        self.awake_pending = False
+        self.window_watch = watch_windows(self.awake_soon)
+        self.awake_timer = QTimer()
+        self.awake_timer.timeout.connect(self.check_awake)
+        self.awake_timer.start(1000)
+
     def place_widgets(self, *_):
         screen = self.app.primaryScreen()
         g, a = screen.geometry(), screen.availableGeometry()
@@ -693,7 +706,9 @@ class Sally:
     def update_visibility(self):
         on = self.live
         has_track = self.clock.track is not None
-        self.stage.setVisible(on)
+        # Qt redraws a visible stage every frame even when nothing moves, so it is hidden while
+        # the desktop is completely covered (the plain cover wallpaper is right behind it)
+        self.stage.setVisible(on and getattr(self, "awake", True))
         self.header.set_live(on)
         self.header.setVisible(True)   # stays up while off, so its "Live on" button can bring it back
         self.player.setVisible(on and has_track)
@@ -730,6 +745,33 @@ class Sally:
             if not live and self.stage.busy:
                 self.stage._finish()   # puts up the waiting wallpaper right away
         self.update_visibility()
+        if hasattr(self, "awake_timer"):
+            self.check_awake()
+
+    def awake_soon(self):
+        # Only a paused Sally needs to react at once (to start drawing the moment the desktop
+        # shows); pausing can wait for the 1-second check. Windows sends these events all the
+        # time, so look at most every 40 ms.
+        if not self.awake and not self.awake_pending:
+            self.awake_pending = True
+            QTimer.singleShot(40, self.check_awake)
+
+    def check_awake(self):
+        self.awake_pending = False
+        locked = session_locked()
+        if locked != self.locked:
+            self.locked = locked
+            log.info("Locked: resting" if locked else "Unlocked")
+            if not locked:
+                self.wake.set()   # catch up with Spotify straight away
+        hidden = locked or not self.live or window_hidden(int(self.stage.winId()))
+        if hidden == (not self.awake):
+            return
+        self.awake = not hidden
+        log.info("Desktop visible: drawing" if self.awake else "Desktop hidden: drawing paused")
+        for widget in (self.stage, self.player, self.lyrics, self.top):
+            widget.set_running(self.awake)
+        self.stage.setVisible(self.live and self.awake)
 
     def all_widgets(self):
         return (self.stage, self.player, self.header, self.lyrics)
@@ -869,6 +911,8 @@ class Sally:
         changed = (track or {}).get("id") != (self.clock.track or {}).get("id")
         self.clock.set(track)
         self.player.update()
+        if self.awake:
+            self.lyrics.tick()   # play/pause/seek moves the lyrics now, not on the next slow check
         if changed or track is None:
             self.update_visibility()
         if track and track["id"] != self.lyrics_for:
@@ -1045,7 +1089,8 @@ class Sally:
                     self.feed.update(track)
                     self.bridge.track.emit(track)  # every poll, so the seek bar re-syncs
 
-                self.wake.wait(next_poll_delay(track))
+                # nobody sees the wallpaper behind the lock screen; unlocking polls at once
+                self.wake.wait(max(next_poll_delay(track), LOCKED_POLL) if getattr(self, "locked", False) else next_poll_delay(track))
                 self.wake.clear()
             except Exception:
                 log.exception("Poll loop error")

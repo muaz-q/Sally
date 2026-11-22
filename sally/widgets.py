@@ -11,6 +11,7 @@ stack, so it sits on the wallpaper like part of it and every normal window cover
 """
 import bisect
 import ctypes
+from ctypes import wintypes
 import math
 import os
 import random
@@ -211,15 +212,52 @@ def window_hidden(hwnd):
         return False
     mine = RECT()
     user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(mine))
-    h = user32.GetWindow(hwnd, 3)  # GW_HWNDPREV: the next window above
-    while h:
-        if user32.IsWindowVisible(ctypes.c_void_p(h)) and not user32.IsIconic(ctypes.c_void_p(h)) \
-                and not (user32.GetWindowLongW(ctypes.c_void_p(h), -20) & 0x20) and not _cloaked(h):
+    # walk down from the top: whatever covers the desktop (a maximised app) is near the top,
+    # while hundreds of hidden helper windows sit between it and us
+    h = user32.GetTopWindow(None)
+    while h and h != hwnd:
+        if user32.IsWindowVisible(ctypes.c_void_p(h)) and not user32.IsIconic(ctypes.c_void_p(h)):
             r = RECT()
             user32.GetWindowRect(ctypes.c_void_p(h), ctypes.byref(r))
-            if r.left <= mine.left and r.top <= mine.top and r.right >= mine.right and r.bottom >= mine.bottom:
+            if r.left <= mine.left and r.top <= mine.top and r.right >= mine.right and r.bottom >= mine.bottom \
+                    and not (user32.GetWindowLongW(ctypes.c_void_p(h), -20) & 0x20) and not _cloaked(h):
                 return True
-        h = user32.GetWindow(h, 3)
+        h = user32.GetWindow(h, 2)  # GW_HWNDNEXT: the next window below
+    return False
+
+
+_WINEVENTPROC = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND, wintypes.LONG,
+                                   wintypes.LONG, wintypes.DWORD, wintypes.DWORD)
+user32.SetWinEventHook.restype = wintypes.HANDLE
+user32.SetWinEventHook.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.HMODULE, _WINEVENTPROC,
+                                   wintypes.DWORD, wintypes.DWORD, wintypes.DWORD]
+user32.OpenInputDesktop.restype = wintypes.HANDLE
+
+
+def watch_windows(callback):
+    """Call callback() whenever any window is shown, hidden, minimised, restored, moved, resized,
+    brought to the front or switched to another virtual desktop. Windows delivers these through
+    the message loop, so callback runs on the UI thread and costs nothing while nothing moves.
+    Returns what must be kept alive for the hooks to keep working."""
+    def on_event(hook, event, hwnd, id_object, id_child, thread, ms):
+        if id_object == 0:   # OBJID_WINDOW: not the caret, the cursor or a control inside a window
+            callback()
+    proc = _WINEVENTPROC(on_event)
+    hooks = []
+    for first, last in ((0x0003, 0x0017),    # foreground, move/size end, minimise start/end
+                        (0x8002, 0x8003),    # shown, hidden
+                        (0x800B, 0x800B),    # moved or resized (maximise and restore too)
+                        (0x8017, 0x8018)):   # cloaked / uncloaked (virtual desktops)
+        hooks.append(user32.SetWinEventHook(first, last, None, proc, 0, 0, 0x0002))   # out of context, skip own process
+    return proc, hooks
+
+
+def session_locked():
+    """True while the lock screen is up: then the input desktop can't be opened."""
+    h = user32.OpenInputDesktop(0, False, 0x0100)   # DESKTOP_SWITCHDESKTOP
+    if not h:
+        return True
+    user32.CloseDesktop(h)
     return False
 
 
@@ -555,7 +593,9 @@ class Stage(QQuickView):
         QTimer.singleShot(0, self.send_to_bottom)
 
     def set_running(self, running):
-        pass  # the graphics card animation is cheap enough to never pause
+        """Only called with False when nothing of the desktop can be seen (or the PC is locked),
+        and with True the moment any of it shows again, so the motion looks unbroken."""
+        self.root.setProperty("paused", not running)
 
     # ── song change ──────────────────────────
     @property
@@ -702,7 +742,20 @@ class Player(DesktopWidget):
         super().__init__(theme)
         self.clock = clock
         self.drag = None  # ms while the knob is being dragged
-        self.timer = precise_timer(self, 100, self.update)
+        self.timer = precise_timer(self, 100, self.tick)
+
+    def tick(self):
+        # a paused song's bar doesn't move; every Spotify update and every click repaints anyway
+        track = self.clock.track
+        if (track and track["is_playing"]) or self.drag is not None:
+            self.update()
+
+    def set_running(self, running):
+        if running:
+            self.timer.start(100)
+            self.update()
+        else:
+            self.timer.stop()
 
     def geometry_parts(self):
         u = self.u
@@ -948,7 +1001,17 @@ class Lyrics(DesktopWidget):
         sliding = time.monotonic() - self.changed_at < self.SLIDE + 0.1
         if sliding:
             self.update()
-        self.timer.setInterval(FRAME if sliding else 50)
+        playing = bool(self.clock.track and self.clock.track["is_playing"])
+        # a paused song's lyrics can't move: check rarely (play/seek call tick() straight away)
+        self.timer.setInterval(FRAME if sliding else (50 if playing else 250))
+
+    def set_running(self, running):
+        if running:
+            self.timer.start(50)
+            self.tick()
+            self.update()
+        else:
+            self.timer.stop()
 
     def buttons(self):
         return [("collapse", QPointF(self.width() - 31 * self.u, 26 * self.u), 14 * self.u)]
@@ -1162,6 +1225,15 @@ class TopTracks(QObject):
     def setVisible(self, on):
         self.visible = on
         self.root.setProperty("showTracks", on)
+
+    def set_running(self, running):
+        if running:
+            self.input_timer.start(33)
+        else:
+            self.input_timer.stop()
+            if self.clickable:
+                self.clickable = False
+                self.stage.setFlag(Qt.WindowType.WindowTransparentForInput, True)
 
     def update_input(self):
         want = False

@@ -11,6 +11,7 @@ Item {
     property real cx: width / 2
     property real cy: 360 * u
     property real t: 0                  // seconds of motion, advanced every frame
+    property bool paused: false         // the desktop is completely hidden: draw nothing at all
 
     // rings: [{a, b, angle, spin, phase, dot, strength, w, h}] in logical pixels
     property var rings: []
@@ -106,7 +107,7 @@ Item {
     }
 
     FrameAnimation {
-        running: true
+        running: !root.paused
         property int n: 0
         onTriggered: {
             root.t += frameTime;
