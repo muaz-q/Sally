@@ -29,3 +29,6 @@ Thumbs.db
 settings.json
 settings.json.tmp
 sally.log*
+
+# Packaging
+*.egg-info/
