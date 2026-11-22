@@ -768,7 +768,8 @@ class Sally:
         if hidden == (not self.awake):
             return
         self.awake = not hidden
-        log.info("Desktop visible: drawing" if self.awake else "Desktop hidden: drawing paused")
+        log.info("Desktop visible: drawing" if self.awake else
+                 f"Desktop hidden: drawing paused ({'locked' if locked else 'not live' if not self.live else getattr(window_hidden, 'by', '?')})")
         for widget in (self.stage, self.player, self.lyrics, self.top):
             widget.set_running(self.awake)
         self.stage.setVisible(self.live and self.awake)

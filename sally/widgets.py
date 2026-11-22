@@ -204,6 +204,9 @@ def _cloaked(hwnd):
     return value.value != 0
 
 
+DESKTOP_CLASSES = ("Progman", "WorkerW")
+
+
 def window_hidden(hwnd):
     """True when a single other window completely covers this one, so animating it only
     burns CPU. Minimised, cloaked (other virtual desktop) and click-through overlay windows
@@ -221,7 +224,11 @@ def window_hidden(hwnd):
             user32.GetWindowRect(ctypes.c_void_p(h), ctypes.byref(r))
             if r.left <= mine.left and r.top <= mine.top and r.right >= mine.right and r.bottom >= mine.bottom \
                     and not (user32.GetWindowLongW(ctypes.c_void_p(h), -20) & 0x20) and not _cloaked(h):
-                return True
+                cls = ctypes.create_unicode_buffer(64)
+                user32.GetClassNameW(ctypes.c_void_p(h), cls, 64)
+                if cls.value not in DESKTOP_CLASSES:   # the desktop itself never hides the wallpaper
+                    window_hidden.by = cls.value
+                    return True
         h = user32.GetWindow(h, 2)  # GW_HWNDNEXT: the next window below
     return False
 
@@ -1232,8 +1239,15 @@ class TopTracks(QObject):
         else:
             self.input_timer.stop()
             if self.clickable:
-                self.clickable = False
-                self.stage.setFlag(Qt.WindowType.WindowTransparentForInput, True)
+                self.set_clickable(False)
+
+    def set_clickable(self, on):
+        self.clickable = on
+        self.stage.setFlag(Qt.WindowType.WindowTransparentForInput, not on)
+        # changing the flag makes Qt re-create the window's place in the stack, which drops it
+        # behind the desktop window: pin it back on top of the wallpaper straight away
+        pin_to_desktop(int(self.stage.winId()), desktop_host())
+        self.stage.send_to_bottom()
 
     def update_input(self):
         want = False
@@ -1249,8 +1263,7 @@ class TopTracks(QObject):
                         want = True
                         break
         if want != self.clickable:
-            self.clickable = want
-            self.stage.setFlag(Qt.WindowType.WindowTransparentForInput, not want)
+            self.set_clickable(want)
         if not want and (self.root.property("holding") or self.root.property("hovered") != -1):
             # the mouse left before QML saw it go: drop the label and let the covers move on
             self.root.setProperty("holding", False)
