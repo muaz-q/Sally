@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sally-wallpaper"
+dynamic = ["version"]
+description = "Your Spotify cover as a live, animated Windows wallpaper"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: Win32 (MS Windows)",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "spotipy>=2.24",
+    "pillow>=10.1",
+    "requests>=2.28",
+    "PySide6-Essentials>=6.8",
+]
+
+[project.scripts]
+sally = "sally.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/muaz-q/Sally"
+
+[tool.setuptools]
+packages = ["sally"]
+
+[tool.setuptools.package-data]
+sally = ["*.qml"]
+
+[tool.setuptools.dynamic]
+version = { attr = "sally.__version__" }
